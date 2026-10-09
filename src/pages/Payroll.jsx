@@ -993,7 +993,11 @@ style={searchInput}
 
 <th style={tableHeader}>Conveyance</th>
 
-<th style={tableHeader}>Medical</th>
+<th style={tableHeader}>
+  {selectedYear > 2026 || (selectedYear === 2026 && selectedMonth >= 4)
+    ? "Mobile Internet"
+    : "Medical"}
+</th>
 
 <th style={tableHeader}>Other Allowance</th>
 
