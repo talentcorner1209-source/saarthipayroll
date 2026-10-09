@@ -3360,7 +3360,7 @@ app.put(
 
     const id = req.params.id;
 
-    const {
+       const {
       bonus,
       deduction,
       basic_da_override,
@@ -3368,7 +3368,8 @@ app.put(
       conveyance_override,
       medical_allowance_override,
       other_allowance_override,
-      pf_override
+      pf_override,
+      pt_override
     } = req.body;
 
     await db.query(
@@ -3382,8 +3383,9 @@ app.put(
         conveyance_override = $5,
         medical_allowance_override = $6,
         other_allowance_override = $7,
-        pf_override = $8
-      WHERE id = $9
+        pf_override = $8,
+        pt_override = $9
+      WHERE id = $10
       `,
       [
         bonus,
@@ -3394,6 +3396,7 @@ app.put(
         medical_allowance_override ?? null,
         other_allowance_override ?? null,
         pf_override ?? null,
+        pt_override ?? null,
         id
       ]
     );
@@ -3457,6 +3460,7 @@ app.get("/api/payroll/monthly", requireAuth, requireRole("hr"), async (req, res)
         employees.medical_allowance_override,
         employees.other_allowance_override,
         employees.pf_override,
+        employees.pt_override,
         COALESCE(
           SUM(CASE WHEN attendance.status = 'Present' THEN 1 ELSE 0 END), 0
         ) AS present_days,
@@ -3483,7 +3487,7 @@ app.get("/api/payroll/monthly", requireAuth, requireRole("hr"), async (req, res)
         employees.esic_enabled, employees.lwf_enabled,
         employees.basic_da_override, employees.hra_override,
         employees.conveyance_override, employees.medical_allowance_override,
-        employees.other_allowance_override, employees.pf_override
+        employees.other_allowance_override, employees.pf_override, employees.pt_override
       ORDER BY employees.id ASC
       `,
       [startDate, endDate]
@@ -3518,10 +3522,11 @@ app.get("/api/payroll/monthly", requireAuth, requireRole("hr"), async (req, res)
       const finalMedical = employee.medical_allowance_override != null ? Number(employee.medical_allowance_override) : calculation.medical;
       const finalOther = employee.other_allowance_override != null ? Number(employee.other_allowance_override) : calculation.otherAllowance;
       const finalPF = employee.pf_override != null ? Number(employee.pf_override) : calculation.pf;
+            const finalPT = employee.pt_override != null ? Number(employee.pt_override) : calculation.professionalTax;
       const finalBonus = employee.incentive_enabled ? (Number(employee.bonus) || 0) : 0;
 
       // Recalculate totals using overridden values (order matters: define finalBonus FIRST)
-      const finalTotalDeduction = finalPF + calculation.esic + calculation.professionalTax + calculation.lwf + calculation.tds + calculation.advance;
+      const finalTotalDeduction = finalPF + calculation.esic + finalPT + calculation.lwf + calculation.tds + calculation.advance;
       const finalNetPay = Number(employee.salary) - finalTotalDeduction;
       const finalPayable = finalNetPay + finalBonus;
 
@@ -3533,11 +3538,12 @@ app.get("/api/payroll/monthly", requireAuth, requireRole("hr"), async (req, res)
         medical_allowance: finalMedical,
         other_allowance: finalOther,
         pf: finalPF,
+        pt: finalPT,
         total_deduction: finalTotalDeduction,
         payable_salary: finalPayable,
         net_pay: finalNetPay,
         bonus: finalBonus,
-        has_overrides: !!(employee.basic_da_override || employee.hra_override || employee.conveyance_override || employee.medical_allowance_override || employee.other_allowance_override || employee.pf_override),
+        has_overrides: !!(employee.basic_da_override || employee.hra_override || employee.conveyance_override || employee.medical_allowance_override || employee.other_allowance_override || employee.pf_override || employee.pt_override),
       };
     });
  
@@ -7424,10 +7430,11 @@ app.put("/api/apply-increment/:id", requireAuth, async (req, res) => {
 (async () => {
   try {
     // Override columns on employees
-    const cols = [
-      'basic_da_override', 'hra_override', 'conveyance_override',
-      'medical_allowance_override', 'other_allowance_override', 'pf_override'
-    ];
+   const cols = [
+  'basic_da_override', 'hra_override', 'conveyance_override',
+  'medical_allowance_override', 'other_allowance_override', 'pf_override',
+  'pt_override'
+];
     for (const col of cols) {
       await db.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS ${col} NUMERIC`);
     }
