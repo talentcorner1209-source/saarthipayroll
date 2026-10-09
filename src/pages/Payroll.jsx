@@ -45,6 +45,7 @@ const [editConveyance, setEditConveyance] = useState('')
 const [editMedical, setEditMedical] = useState('')
 const [editOtherAllowance, setEditOtherAllowance] = useState('')
 const [editPF, setEditPF] = useState('')
+const [editPT, setEditPT] = useState('')
 const [searchTerm, setSearchTerm] =useState("")
 const [deptFilter, setDeptFilter] = useState("All")
 const [incrementHistory,setIncrementHistory] = useState([]);
@@ -72,7 +73,8 @@ const forcePresentTillSep2026 = (data) => {
       Number(emp.bonus || 0);
 
     const deductions =
-      Number(emp.pf || 0) + Number(emp.deduction || 0);
+      Number(emp.pf || 0) +
+      (emp.pt != null ? Number(emp.pt) : Number(emp.deduction || 0));
 
 return {
   ...emp,
@@ -132,6 +134,7 @@ const setPayroll = (data) => setPayrollState(forcePresentTillSep2026(data));
   setEditMedical(employee.medical_allowance_override != null ? employee.medical_allowance_override : '')
   setEditOtherAllowance(employee.other_allowance_override != null ? employee.other_allowance_override : '')
   setEditPF(employee.pf_override != null ? employee.pf_override : '')
+  setEditPT(employee.pt_override != null ? employee.pt_override : '')
 }
 const savePayrollChanges = async () => {
   try {
@@ -151,6 +154,7 @@ const savePayrollChanges = async () => {
           medical_allowance_override: editMedical !== '' ? Number(editMedical) : null,
           other_allowance_override: editOtherAllowance !== '' ? Number(editOtherAllowance) : null,
           pf_override: editPF !== '' ? Number(editPF) : null,
+          pt_override: editPT !== '' ? Number(editPT) : null,
         })
       }
     )
@@ -529,7 +533,15 @@ const importPayrollCSV = (event) => {
                   Number(row["Bonus"] || 0),
 
                 deduction:
-                  Number(row["Deduction"] || 0)
+                  Number(row["Deduction"] || 0),
+
+                basic_da_override: employee.basic_da_override ?? null,
+                hra_override: employee.hra_override ?? null,
+                conveyance_override: employee.conveyance_override ?? null,
+                medical_allowance_override: employee.medical_allowance_override ?? null,
+                other_allowance_override: employee.other_allowance_override ?? null,
+                pf_override: employee.pf_override ?? null,
+                pt_override: employee.pt_override ?? null
               })
             }
           );
@@ -1623,7 +1635,8 @@ style={{
   const bonus = Number(editBonus || 0);
   const deduction = Number(editDeduction || 0);
   const totalEarnings = basicDA + hra + conveyance + medical + other + bonus;
-  const totalDeductions = pf + deduction;
+  const pt = editPT !== '' ? Number(editPT) : deduction;
+  const totalDeductions = pf + pt;
   const netPay = Math.max(0, totalEarnings - totalDeductions);
 
   return (
@@ -1673,6 +1686,10 @@ style={{
             <label style={{ color: textColor('secondary'), fontSize: '12px', fontWeight: '600' }}>PF</label>
             <input type="number" value={editPF} onChange={(e) => setEditPF(e.target.value)} placeholder={`Auto: ₹${editingEmployee?.pf || 0}`} style={{ ...getModalInput(), marginTop: '4px', marginBottom: '0' }} />
           </div>
+          <div>
+            <label style={{ color: textColor('secondary'), fontSize: '12px', fontWeight: '600' }}>PT</label>
+            <input type="number" value={editPT} onChange={(e) => setEditPT(e.target.value)} placeholder={`Auto: ₹${editingEmployee?.pt || 0}`} style={{ ...getModalInput(), marginTop: '4px', marginBottom: '0' }} />
+          </div>
         </div>
       </div>
 
@@ -1701,6 +1718,7 @@ style={{
           <span style={{ color: textColor('secondary') }}>Medical: <strong style={{ color: textColor('primary') }}>₹{medical.toLocaleString()}</strong></span>
           <span style={{ color: textColor('secondary') }}>Other: <strong style={{ color: textColor('primary') }}>₹{other.toLocaleString()}</strong></span>
           <span style={{ color: textColor('secondary') }}>PF: <strong style={{ color: '#ef4444' }}>₹{pf.toLocaleString()}</strong></span>
+          <span style={{ color: textColor('secondary') }}>PT: <strong style={{ color: '#ef4444' }}>₹{pt.toLocaleString()}</strong></span>
           <span style={{ color: textColor('secondary') }}>Bonus: <strong style={{ color: '#22c55e' }}>₹{bonus.toLocaleString()}</strong></span>
           <span style={{ color: textColor('secondary') }}>Extra Deduction: <strong style={{ color: '#ef4444' }}>₹{deduction.toLocaleString()}</strong></span>
         </div>
