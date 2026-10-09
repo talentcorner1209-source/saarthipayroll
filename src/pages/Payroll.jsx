@@ -69,7 +69,6 @@ const forcePresentTillSep2026 = (data) => {
       Number(emp.hra || 0) +
       Number(emp.conveyance_allowance || 0) +
       Number(emp.medical_allowance || 0) +
-      Number(emp.other_allowance || 0) +
       Number(emp.bonus || 0);
 
     const deductions =
@@ -1634,7 +1633,7 @@ style={{
   const pf = editPF !== '' ? Number(editPF) : editingEmployee?.pf || 0;
   const bonus = Number(editBonus || 0);
   const deduction = Number(editDeduction || 0);
-  const totalEarnings = basicDA + hra + conveyance + medical + other + bonus;
+  const totalEarnings = basicDA + hra + conveyance + medical + bonus;
   const pt = editPT !== '' ? Number(editPT) : deduction;
   const totalDeductions = pf + pt;
   const netPay = Math.max(0, totalEarnings - totalDeductions);
