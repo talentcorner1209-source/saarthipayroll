@@ -7978,52 +7978,84 @@ app.post(
       await client.query("BEGIN");
 
       // ---- Employee name matching (flexible) ----
-      const empRows = (
-        await client.query(`SELECT id, name FROM employees`)
-      ).rows;
-
       const nameTokens = (s) =>
-        String(s || "")
-          .toLowerCase()
-          .replace(/[^a-z0-9\s]/g, " ")
-          .split(/\s+/)
-          .filter(Boolean);
+        String(s || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
 
-      const empIndex = empRows.map((e) => {
-        const tokens = nameTokens(e.name);
-        return { id: e.id, tokens, key: tokens.join(" ") };
-      });
-
-      const matchEmployeeId = (name) => {
-        const t = nameTokens(name);
-        if (t.length === 0) return null;
-
-        const key = t.join(" ");
-        const exact = empIndex.filter((e) => e.key === key);
-        if (exact.length === 1) return exact[0].id;
-        if (exact.length > 1) return null;
-
-        let best = [];
-        let bestScore = 0;
-        for (const e of empIndex) {
-          const common = t.filter((x) => e.tokens.includes(x)).length;
-          const shorter = Math.min(t.length, e.tokens.length);
-          if (common === 0 || common !== shorter) continue;
-          if (common > bestScore) {
-            bestScore = common;
-            best = [e];
-          } else if (common === bestScore) {
-            best.push(e);
-          }
-        }
-        return best.length === 1 ? best[0].id : null;
+      const editDistance = (a, b) => {
+        const m = a.length, n = b.length;
+        const dp = Array.from({ length: m + 1 }, (_, i) => {
+          const row = Array(n + 1).fill(0); row[0] = i; return row;
+        });
+        for (let j = 0; j <= n; j++) dp[0][j] = j;
+        for (let i = 1; i <= m; i++)
+          for (let j = 1; j <= n; j++)
+            dp[i][j] = Math.min(dp[i-1][j] + 1, dp[i][j-1] + 1, dp[i-1][j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+        return dp[m][n];
       };
+
+      const tokenSim = (a, b) => {
+        if (a === b) return 1;
+        const minLen = Math.min(a.length, b.length), maxLen = Math.max(a.length, b.length);
+        if (minLen >= 4 && (a.startsWith(b) || b.startsWith(a))) return 0.9;
+        const d = editDistance(a, b);
+        if (maxLen >= 5 && d <= 1) return 0.85;
+        if (maxLen >= 8 && d <= 2) return 0.75;
+        return 0;
+      };
+
+      const nameScore = (a, b) => {
+        const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+        if (!short.length) return 0;
+        if (short.length === 1 && long.length > 1) return 0;
+        const used = new Set();
+        let total = 0;
+        for (const s of short) {
+          let best = 0, bi = -1;
+          long.forEach((l, i) => {
+            if (used.has(i)) return;
+            const v = tokenSim(s, l);
+            if (v > best) { best = v; bi = i; }
+          });
+          if (best === 0) return 0;
+          used.add(bi);
+          total += best;
+        }
+        const avg = total / short.length;
+        if (avg < 0.75) return 0;
+        return avg + (a.length === b.length ? 0.05 : 0);
+      };
+
+      // one-to-one assignment: assigned[i] = employee id for records[i] (or null)
+      const assigned = records.map(() => null);
+      {
+        const cands = [];
+        records.forEach((rec, ri) => {
+          const rt = nameTokens(rec.employee_name);
+          empRows.forEach((e) => {
+            const score = nameScore(rt, nameTokens(e.name));
+            if (score > 0) cands.push({ ri, e, score });
+          });
+        });
+        cands.sort(
+          (x, y) =>
+            y.score - x.score ||
+            (Number(y.e.salary) > 0) - (Number(x.e.salary) > 0) ||
+            x.e.id - y.e.id
+        );
+        const usedEmp = new Set();
+        for (const c of cands) {
+          if (assigned[c.ri] !== null || usedEmp.has(c.e.id)) continue;
+          assigned[c.ri] = c.e.id;
+          usedEmp.add(c.e.id);
+        }
+      }
 
       const unmatched = [];
       // -------------------------------------------
 
-      for (const rec of records) {
-        const employeeId = matchEmployeeId(rec.employee_name);
+      for (let i = 0; i < records.length; i++) {
+        const rec = records[i];
+        const employeeId = assigned[i];
         if (!employeeId) unmatched.push(rec.employee_name);
 
         await client.query(

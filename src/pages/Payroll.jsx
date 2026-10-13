@@ -660,22 +660,31 @@ const uploadSalaryExcel = async (event) => {
   );
   if (!confirmed) { resetInput(); return; }
 
+  const url = `${API_BASE}/api/salary-computation/upload`;
+
   try {
     const formData = new FormData();
     formData.append("file", file);
     formData.append("month", selectedMonth);
     formData.append("year", selectedYear);
 
-    const res = await apiFetch(`${API_BASE}/api/salary-computation/upload`, {
-      method: "POST",
-      body: formData
-    });
+    const res = await apiFetch(url, { method: "POST", body: formData });
 
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || "Upload failed.");
+    const raw = await res.text();
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      console.error("Non-JSON response:", raw);
+      throw new Error(
+        `Server returned HTML, not JSON.\n\nURL: ${url}\nStatus: ${res.status}\n\n` +
+        raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 250)
+      );
+    }
+
+    if (!res.ok) throw new Error(data.message || `Upload failed (${res.status}).`);
 
     await fetchSalaryComputation();
-
     alert("✅ " + data.message);
   } catch (err) {
     console.error("Salary Excel upload error:", err);

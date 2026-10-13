@@ -15,10 +15,15 @@ export const apiFetch = async (url, options = {}) => {
     throw new Error("You are not logged in");
   }
 
+  // File uploads (FormData) must NOT get a Content-Type header:
+  // the browser sets it itself, including the multipart boundary.
+  const isFormData =
+    typeof FormData !== "undefined" && options.body instanceof FormData;
+
   const headers = {
+    ...(isFormData ? {} : { "Content-Type": "application/json" }),
     ...(options.headers || {}),
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json"
+    Authorization: `Bearer ${token}`
   };
 
   const response = await fetch(url, {
