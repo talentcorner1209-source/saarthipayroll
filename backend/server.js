@@ -7977,6 +7977,12 @@ app.post(
       client = await db.connect();
       await client.query("BEGIN");
 
+      // Load employees so uploaded rows can be linked by name
+      const empResult = await client.query(
+        "SELECT id, name, salary FROM employees"
+      );
+      const empRows = empResult.rows;
+
       // ---- Employee name matching (flexible) ----
       const nameTokens = (s) =>
         String(s || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
