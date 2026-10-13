@@ -14,7 +14,13 @@ import {
   requireSession
 } from "./authMiddleware.js";
 import { createClient } from "@supabase/supabase-js";
+import multer from "multer";
+import * as XLSX from "xlsx";
 
+const salaryUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }
+});
 // Load .env from backend directory regardless of CWD
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -7808,5 +7814,275 @@ app.post(
     }
   }
 );
+// ============================================
+// SALARY COMPUTATION EXCEL UPLOAD
+// ============================================
+(async () => {
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS salary_computation (
+        id SERIAL PRIMARY KEY,
+        employee_id INTEGER,
+        sr_no INTEGER,
+        employee_name TEXT NOT NULL,
+        month INTEGER NOT NULL,
+        year INTEGER NOT NULL,
+        ctc NUMERIC DEFAULT 0,
+        fixed_gross_salary NUMERIC DEFAULT 0,
+        basic_da NUMERIC DEFAULT 0,
+        hra NUMERIC DEFAULT 0,
+        mob_internet NUMERIC DEFAULT 0,
+        conveyance NUMERIC DEFAULT 0,
+        gross NUMERIC DEFAULT 0,
+        earn_basic NUMERIC DEFAULT 0,
+        earn_hra NUMERIC DEFAULT 0,
+        earn_mob_internet NUMERIC DEFAULT 0,
+        earn_conveyance NUMERIC DEFAULT 0,
+        earn_gross NUMERIC DEFAULT 0,
+        pf_wages NUMERIC DEFAULT 0,
+        pf NUMERIC DEFAULT 0,
+        esic NUMERIC DEFAULT 0,
+        pt NUMERIC DEFAULT 0,
+        tds NUMERIC DEFAULT 0,
+        lwf NUMERIC DEFAULT 0,
+        advance NUMERIC DEFAULT 0,
+        total_deduction NUMERIC DEFAULT 0,
+        net_payable NUMERIC DEFAULT 0,
+        gratuity NUMERIC DEFAULT 0,
+        employer_pf NUMERIC DEFAULT 0,
+        employer_esic NUMERIC DEFAULT 0,
+        bonus NUMERIC DEFAULT 0,
+        employer_lwf NUMERIC DEFAULT 0,
+        total_ctc NUMERIC DEFAULT 0,
+        total_days_of_month NUMERIC DEFAULT 0,
+        total_payable_days NUMERIC DEFAULT 0,
+        per_day_amount NUMERIC DEFAULT 0,
+        remark TEXT DEFAULT '',
+        uploaded_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (employee_name, month, year)
+      )
+    `);
+    console.log("salary_computation table ensured.");
+  } catch (e) {
+    console.log("salary_computation migration note:", e.message);
+  }
+})();
 
+app.post(
+  "/api/salary-computation/upload",
+  requireAuth,
+  requireRole("hr"),
+  salaryUpload.single("file"),
+  async (req, res) => {
+    let client;
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded." });
+      }
+
+      const month = Number(req.body.month);
+      const year = Number(req.body.year);
+      if (!month || !year) {
+        return res.status(400).json({ message: "Month and year are required." });
+      }
+
+      const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const grid = XLSX.utils.sheet_to_json(sheet, {
+        header: 1,
+        defval: "",
+        raw: true
+      });
+
+      // Locate header row ("Sr. No" + "Employee Name")
+      let headerRow = -1;
+      let srCol = -1;
+      for (let r = 0; r < grid.length; r++) {
+        const cells = grid[r].map((c) => String(c).trim().toLowerCase());
+        const sr = cells.findIndex((c) => c.startsWith("sr"));
+        if (sr !== -1 && cells[sr + 1] === "employee name") {
+          headerRow = r;
+          srCol = sr;
+          break;
+        }
+      }
+
+      if (headerRow === -1) {
+        return res.status(400).json({
+          message:
+            "Invalid format: could not find the 'Sr. No' / 'Employee Name' header row."
+        });
+      }
+
+      const num = (v) => {
+        const n = Number(String(v).replace(/,/g, ""));
+        return Number.isFinite(n) ? n : 0;
+      };
+
+      const records = [];
+      for (let r = headerRow + 1; r < grid.length; r++) {
+        const row = grid[r];
+        const g = (i) => row[srCol + i];
+
+        const srNo = Number(g(0));
+        const name = String(g(1) || "").trim();
+
+        // Stop at the Total row / end of employee list
+        if (!name || !Number.isFinite(srNo) || String(g(0)).trim() === "") {
+          if (records.length > 0) break;
+          continue;
+        }
+
+        records.push({
+          sr_no: srNo,
+          employee_name: name,
+          ctc: num(g(2)),
+          fixed_gross_salary: num(g(3)),
+          basic_da: num(g(4)),
+          hra: num(g(5)),
+          mob_internet: num(g(6)),
+          conveyance: num(g(7)),
+          gross: num(g(8)),
+          earn_basic: num(g(9)),
+          earn_hra: num(g(10)),
+          earn_mob_internet: num(g(11)),
+          earn_conveyance: num(g(12)),
+          earn_gross: num(g(13)),
+          pf_wages: num(g(14)),
+          pf: num(g(15)),
+          esic: num(g(16)),
+          pt: num(g(17)),
+          tds: num(g(18)),
+          lwf: num(g(19)),
+          advance: num(g(20)),
+          total_deduction: num(g(21)),
+          net_payable: num(g(22)),
+          gratuity: num(g(23)),
+          employer_pf: num(g(24)),
+          employer_esic: num(g(25)),
+          bonus: num(g(26)),
+          employer_lwf: num(g(27)),
+          total_ctc: num(g(28)),
+          total_days_of_month: num(g(29)),
+          total_payable_days: num(g(30)),
+          per_day_amount: num(g(31)),
+          remark: String(g(32) || "").trim()
+        });
+      }
+
+      if (records.length === 0) {
+        return res.status(400).json({ message: "No employee rows found in the file." });
+      }
+
+      client = await db.connect();
+      await client.query("BEGIN");
+
+      for (const rec of records) {
+        const emp = await client.query(
+          `SELECT id FROM employees WHERE LOWER(TRIM(name)) = LOWER($1) LIMIT 1`,
+          [rec.employee_name]
+        );
+        const employeeId = emp.rows[0]?.id || null;
+
+        await client.query(
+          `
+          INSERT INTO salary_computation (
+            employee_id, sr_no, employee_name, month, year,
+            ctc, fixed_gross_salary, basic_da, hra, mob_internet, conveyance, gross,
+            earn_basic, earn_hra, earn_mob_internet, earn_conveyance, earn_gross,
+            pf_wages, pf, esic, pt, tds, lwf, advance, total_deduction, net_payable,
+            gratuity, employer_pf, employer_esic, bonus, employer_lwf, total_ctc,
+            total_days_of_month, total_payable_days, per_day_amount, remark
+          ) VALUES (
+            $1,$2,$3,$4,$5,
+            $6,$7,$8,$9,$10,$11,$12,
+            $13,$14,$15,$16,$17,
+            $18,$19,$20,$21,$22,$23,$24,$25,$26,
+            $27,$28,$29,$30,$31,$32,
+            $33,$34,$35,$36
+          )
+          ON CONFLICT (employee_name, month, year) DO UPDATE SET
+            employee_id = EXCLUDED.employee_id,
+            sr_no = EXCLUDED.sr_no,
+            ctc = EXCLUDED.ctc,
+            fixed_gross_salary = EXCLUDED.fixed_gross_salary,
+            basic_da = EXCLUDED.basic_da,
+            hra = EXCLUDED.hra,
+            mob_internet = EXCLUDED.mob_internet,
+            conveyance = EXCLUDED.conveyance,
+            gross = EXCLUDED.gross,
+            earn_basic = EXCLUDED.earn_basic,
+            earn_hra = EXCLUDED.earn_hra,
+            earn_mob_internet = EXCLUDED.earn_mob_internet,
+            earn_conveyance = EXCLUDED.earn_conveyance,
+            earn_gross = EXCLUDED.earn_gross,
+            pf_wages = EXCLUDED.pf_wages,
+            pf = EXCLUDED.pf,
+            esic = EXCLUDED.esic,
+            pt = EXCLUDED.pt,
+            tds = EXCLUDED.tds,
+            lwf = EXCLUDED.lwf,
+            advance = EXCLUDED.advance,
+            total_deduction = EXCLUDED.total_deduction,
+            net_payable = EXCLUDED.net_payable,
+            gratuity = EXCLUDED.gratuity,
+            employer_pf = EXCLUDED.employer_pf,
+            employer_esic = EXCLUDED.employer_esic,
+            bonus = EXCLUDED.bonus,
+            employer_lwf = EXCLUDED.employer_lwf,
+            total_ctc = EXCLUDED.total_ctc,
+            total_days_of_month = EXCLUDED.total_days_of_month,
+            total_payable_days = EXCLUDED.total_payable_days,
+            per_day_amount = EXCLUDED.per_day_amount,
+            remark = EXCLUDED.remark,
+            uploaded_at = NOW()
+          `,
+          [
+            employeeId, rec.sr_no, rec.employee_name, month, year,
+            rec.ctc, rec.fixed_gross_salary, rec.basic_da, rec.hra, rec.mob_internet, rec.conveyance, rec.gross,
+            rec.earn_basic, rec.earn_hra, rec.earn_mob_internet, rec.earn_conveyance, rec.earn_gross,
+            rec.pf_wages, rec.pf, rec.esic, rec.pt, rec.tds, rec.lwf, rec.advance, rec.total_deduction, rec.net_payable,
+            rec.gratuity, rec.employer_pf, rec.employer_esic, rec.bonus, rec.employer_lwf, rec.total_ctc,
+            rec.total_days_of_month, rec.total_payable_days, rec.per_day_amount, rec.remark
+          ]
+        );
+      }
+
+      await client.query("COMMIT");
+
+      res.json({
+        success: true,
+        message: `${records.length} salary record(s) saved for ${month}/${year}.`,
+        count: records.length
+      });
+    } catch (err) {
+      if (client) await client.query("ROLLBACK").catch(() => {});
+      console.error("Salary computation upload error:", err);
+      res.status(500).json({ message: err.message || "Upload failed." });
+    } finally {
+      client?.release();
+    }
+  }
+);
+
+app.get(
+  "/api/salary-computation",
+  requireAuth,
+  requireRole("hr"),
+  async (req, res) => {
+    try {
+      const { month, year } = req.query;
+      const result = await db.query(
+        `SELECT * FROM salary_computation
+         WHERE month = $1 AND year = $2
+         ORDER BY sr_no ASC`,
+        [month, year]
+      );
+      res.json(result.rows);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: err.message });
+    }
+  }
+);
 export default app;

@@ -620,7 +620,50 @@ const importPayrollCSV = (event) => {
   });
 
 };
+
+const uploadSalaryExcel = async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  const resetInput = () => { event.target.value = ""; };
+
+  if (!/\.(xlsx|xls)$/i.test(file.name)) {
+    alert("❌ Invalid File\n\nPlease select an Excel file (.xlsx or .xls).");
+    resetInput();
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `Upload "${file.name}" as the salary computation for ` +
+    `${selectedMonth}/${selectedYear}?\n\n` +
+    "Existing records for the same employee and month will be updated."
+  );
+  if (!confirmed) { resetInput(); return; }
+
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("month", selectedMonth);
+    formData.append("year", selectedYear);
+
+    const res = await apiFetch(`${API_BASE}/api/salary-computation/upload`, {
+      method: "POST",
+      body: formData
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || "Upload failed.");
+
+    alert("✅ " + data.message);
+  } catch (err) {
+    console.error("Salary Excel upload error:", err);
+    alert("❌ Upload Failed\n\n" + err.message);
+  } finally {
+    resetInput();
+  }
+};
 const handleEdit = async (employee) => {
+
   setSelectedEmployee(employee);
 
   try {
@@ -713,6 +756,25 @@ const payrollOptions = [
     gap: "12px",
   }}
 >
+  <input
+    id="salary-excel-upload"
+    type="file"
+    accept=".xlsx,.xls"
+    hidden
+    onChange={uploadSalaryExcel}
+  />
+
+  <button
+    onClick={() => document.getElementById("salary-excel-upload").click()}
+    style={mkGlassBtn()}
+    onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-2px)"; }}
+    onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; }}
+  >
+    <span style={{ fontSize: "14px", fontWeight: 600, letterSpacing: ".2px" }}>
+      Upload Salary Excel
+    </span>
+  </button>
+
   <input
     id="payroll-csv-import"
     type="file"
