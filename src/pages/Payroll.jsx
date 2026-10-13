@@ -122,6 +122,26 @@ const setPayroll = (data) => setPayrollState(forcePresentTillSep2026(data));
       });
   }, [selectedMonth, selectedYear]);
 
+  const [salaryComputation, setSalaryComputation] = useState([]);
+
+  const fetchSalaryComputation = async () => {
+    try {
+      const res = await apiFetch(
+        `${API_BASE}/api/salary-computation?month=${selectedMonth}&year=${selectedYear}`
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setSalaryComputation(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error("Salary computation fetch error:", err);
+      setSalaryComputation([]);
+    }
+  };
+
+  useEffect(() => {
+    fetchSalaryComputation();
+  }, [selectedMonth, selectedYear]);
+
 
   const openEditModal = (employee) => {
   setEditingEmployee(employee)
@@ -653,6 +673,8 @@ const uploadSalaryExcel = async (event) => {
 
     const data = await res.json();
     if (!res.ok) throw new Error(data.message || "Upload failed.");
+
+    await fetchSalaryComputation();
 
     alert("✅ " + data.message);
   } catch (err) {
@@ -1685,6 +1707,90 @@ style={{
 
 </GlassScrollArea>
 </>
+
+<>
+  <div style={{ marginTop: "45px", marginBottom: "24px" }}>
+    <h2
+      style={{
+        margin: 0,
+        fontSize: "30px",
+        fontWeight: "700",
+        color: textColor("primary"),
+      }}
+    >
+      Uploaded Salary Computation
+    </h2>
+    <p style={{ marginTop: "8px", color: textColor("secondary"), fontSize: "15px" }}>
+      {salaryComputation.length} record(s) for{" "}
+      {["", "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"][selectedMonth]}{" "}
+      {selectedYear}
+    </p>
+  </div>
+
+  <div
+    style={{
+      borderRadius: "24px",
+      border: "1px solid #e2e8f0",
+      background: "#ffffff",
+      boxShadow: "0 2px 8px rgba(0,0,0,.06)",
+      overflow: "auto",
+      maxHeight: "650px",
+    }}
+  >
+    <table style={{ ...tableStyle, color: textColor("primary") }}>
+      <thead>
+        <tr style={tableHeaderRow}>
+          {["Sr", "Employee", "CTC", "Fixed Gross", "Basic + DA", "HRA",
+            "Mob & Internet", "Conveyance", "Gross", "Earned Gross", "PF",
+            "ESIC", "PT", "TDS", "Advance", "Total Deduction", "Net Payable",
+            "Days", "Payable Days", "Remark"].map((h) => (
+            <th key={h} style={tableHeader}>{h}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {salaryComputation.length === 0 ? (
+          <tr>
+            <td colSpan={20} style={{ padding: "30px", color: "#64748b" }}>
+              No salary sheet uploaded for this month.
+            </td>
+          </tr>
+        ) : (
+          salaryComputation.map((r) => (
+            <tr key={r.id ?? `${r.employee_name}-${r.month}-${r.year}`} style={rowStyle}>
+              <td style={tdStyle}>{r.sr_no}</td>
+              <td style={{ ...tdStyle, fontWeight: "700" }}>{r.employee_name}</td>
+              <td style={tdStyle}>₹{Number(r.ctc).toLocaleString()}</td>
+              <td style={tdStyle}>₹{Number(r.fixed_gross_salary).toLocaleString()}</td>
+              <td style={tdStyle}>₹{Number(r.basic_da).toLocaleString()}</td>
+              <td style={tdStyle}>₹{Number(r.hra).toLocaleString()}</td>
+              <td style={tdStyle}>₹{Number(r.mob_internet).toLocaleString()}</td>
+              <td style={tdStyle}>₹{Number(r.conveyance).toLocaleString()}</td>
+              <td style={tdStyle}>₹{Number(r.gross).toLocaleString()}</td>
+              <td style={tdStyle}>₹{Number(r.earn_gross).toLocaleString()}</td>
+              <td style={tdStyle}>₹{Number(r.pf).toLocaleString()}</td>
+              <td style={tdStyle}>₹{Number(r.esic).toLocaleString()}</td>
+              <td style={tdStyle}>₹{Number(r.pt).toLocaleString()}</td>
+              <td style={tdStyle}>₹{Number(r.tds).toLocaleString()}</td>
+              <td style={tdStyle}>₹{Number(r.advance).toLocaleString()}</td>
+              <td style={{ ...tdStyle, color: "#ef4444" }}>
+                ₹{Number(r.total_deduction).toLocaleString()}
+              </td>
+              <td style={{ ...tdStyle, color: "#0891b2", fontWeight: "800" }}>
+                ₹{Number(r.net_payable).toLocaleString()}
+              </td>
+              <td style={tdStyle}>{r.total_days_of_month}</td>
+              <td style={tdStyle}>{r.total_payable_days}</td>
+              <td style={tdStyle}>{r.remark}</td>
+            </tr>
+          ))
+        )}
+      </tbody>
+    </table>
+  </div>
+</>
+
           {editingEmployee && (() => {
   const gross = Number(editingEmployee?.salary || 0);
   const basicDA = editBasicDA !== '' ? Number(editBasicDA) : editingEmployee?.basic_da || 0;

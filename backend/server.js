@@ -7977,12 +7977,54 @@ app.post(
       client = await db.connect();
       await client.query("BEGIN");
 
+      // ---- Employee name matching (flexible) ----
+      const empRows = (
+        await client.query(`SELECT id, name FROM employees`)
+      ).rows;
+
+      const nameTokens = (s) =>
+        String(s || "")
+          .toLowerCase()
+          .replace(/[^a-z0-9\s]/g, " ")
+          .split(/\s+/)
+          .filter(Boolean);
+
+      const empIndex = empRows.map((e) => {
+        const tokens = nameTokens(e.name);
+        return { id: e.id, tokens, key: tokens.join(" ") };
+      });
+
+      const matchEmployeeId = (name) => {
+        const t = nameTokens(name);
+        if (t.length === 0) return null;
+
+        const key = t.join(" ");
+        const exact = empIndex.filter((e) => e.key === key);
+        if (exact.length === 1) return exact[0].id;
+        if (exact.length > 1) return null;
+
+        let best = [];
+        let bestScore = 0;
+        for (const e of empIndex) {
+          const common = t.filter((x) => e.tokens.includes(x)).length;
+          const shorter = Math.min(t.length, e.tokens.length);
+          if (common === 0 || common !== shorter) continue;
+          if (common > bestScore) {
+            bestScore = common;
+            best = [e];
+          } else if (common === bestScore) {
+            best.push(e);
+          }
+        }
+        return best.length === 1 ? best[0].id : null;
+      };
+
+      const unmatched = [];
+      // -------------------------------------------
+
       for (const rec of records) {
-        const emp = await client.query(
-          `SELECT id FROM employees WHERE LOWER(TRIM(name)) = LOWER($1) LIMIT 1`,
-          [rec.employee_name]
-        );
-        const employeeId = emp.rows[0]?.id || null;
+        const employeeId = matchEmployeeId(rec.employee_name);
+        if (!employeeId) unmatched.push(rec.employee_name);
 
         await client.query(
           `
@@ -8052,8 +8094,13 @@ app.post(
 
       res.json({
         success: true,
-        message: `${records.length} salary record(s) saved for ${month}/${year}.`,
-        count: records.length
+        message:
+          `${records.length} salary record(s) saved for ${month}/${year}.` +
+          (unmatched.length
+            ? `\n\nNot linked to any employee (name not found): ${unmatched.join(", ")}`
+            : ""),
+        count: records.length,
+        unmatched
       });
     } catch (err) {
       if (client) await client.query("ROLLBACK").catch(() => {});
