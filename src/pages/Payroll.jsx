@@ -124,18 +124,40 @@ const setPayroll = (data) => setPayrollState(forcePresentTillSep2026(data));
   }, [selectedMonth, selectedYear]);
 
   // ===== SALARY SHEET: LOADED FROM UPLOADED EXCEL (NO API) =====
+  // ===== SALARY SHEET: SAVED IN DATABASE, BROWSER COPY AS BACKUP =====
   const SALARY_LS_KEY = (m, y) => `salary_computation_${y}_${m}`;
 
   const [salaryComputation, setSalaryComputation] = useState([]);
 
-  // restore the last uploaded sheet for the selected month/year
-  useEffect(() => {
+  const loadSalaryFromLocal = () => {
     try {
       const saved = localStorage.getItem(SALARY_LS_KEY(selectedMonth, selectedYear));
-      setSalaryComputation(saved ? JSON.parse(saved) : []);
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      setSalaryComputation([]);
+      return [];
     }
+  };
+
+  const fetchSalaryComputation = async () => {
+    try {
+      const res = await apiFetch(
+        `${API_BASE}/api/salary-computation?month=${selectedMonth}&year=${selectedYear}`
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        setSalaryComputation(data);
+        return;
+      }
+    } catch (err) {
+      console.error("Salary computation fetch error:", err);
+    }
+    // database empty or unreachable -> show the browser copy
+    setSalaryComputation(loadSalaryFromLocal());
+  };
+
+  useEffect(() => {
+    fetchSalaryComputation();
   }, [selectedMonth, selectedYear]);
 
 
@@ -238,9 +260,22 @@ const setPayroll = (data) => setPayrollState(forcePresentTillSep2026(data));
 
     const n = (v) => Number(v) || 0;
 
-    return payrollRaw.map((emp) => {
+    // sheet row -> matched system employee (if any)
+    const empBySheetRow = new Map();
+    payrollRaw.forEach((emp) => {
       const r = sheetByEmpId.get(emp.id);
-      if (!r) return emp;
+      if (r) empBySheetRow.set(r, emp);
+    });
+
+    // ONLY the employees present in the uploaded sheet, in sheet order
+    return salaryComputation.map((r) => {
+      const emp =
+        empBySheetRow.get(r) || {
+          id: `sheet-${r.id ?? r.employee_name}`,
+          name: r.employee_name,
+          department: "",
+          unmatched: true, // name not found in the system
+        };
 
       const totalDays = n(r.total_days_of_month);
       const payableDays = n(r.total_payable_days);
@@ -865,12 +900,42 @@ const uploadSalaryExcel = async (event) => {
 
     if (records.length === 0) throw new Error("No employee rows found in the file.");
 
+    // 1) show immediately + keep a browser backup
     setSalaryComputation(records);
     try {
       localStorage.setItem(SALARY_LS_KEY(selectedMonth, selectedYear), JSON.stringify(records));
     } catch { /* storage unavailable – table still shows */ }
 
-    alert(`✅ ${records.length} employee record(s) loaded from "${file.name}".`);
+    // 2) save permanently in the database
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("month", selectedMonth);
+      formData.append("year", selectedYear);
+
+      const res = await apiFetch(`${API_BASE}/api/salary-computation/upload`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch { /* non-JSON (e.g. 404 page) */ }
+
+      if (!res.ok) {
+        throw new Error(data.message || `Server returned ${res.status}`);
+      }
+
+      await fetchSalaryComputation(); // reload what the database actually stored
+      alert("✅ Saved to database.\n\n" + (data.message || `${records.length} record(s) saved.`));
+    } catch (saveErr) {
+      console.error("Salary save to database failed:", saveErr);
+      alert(
+        `⚠️ ${records.length} record(s) are shown, but saving to the database FAILED.\n\n` +
+        saveErr.message +
+        "\n\nThe data is kept only in this browser until the save succeeds."
+      );
+    }
   } catch (err) {
     console.error("Salary Excel read error:", err);
     alert("❌ Upload Failed\n\n" + err.message);
