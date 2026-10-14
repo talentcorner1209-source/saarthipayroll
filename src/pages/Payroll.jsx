@@ -1,11 +1,12 @@
 import { apiFetch, API_BASE } from "../api";
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import SearchableDropdown from '../components/SearchableDropdown'
 import { jsPDF } from 'jspdf'
 import StatCard from "../components/Dashboard/StatCard";
 import PayrollDrawer from "../components/PayrollDrawer";
 import GlassScrollArea from "../components/GlassScrollArea";
 import Papa from 'papaparse'
+import * as XLSX from "xlsx";
 import {
   glassButton as mkGlassBtn,
   textColor,
@@ -14,7 +15,7 @@ import {
 
 function Payroll() {
 
-  const [payroll, setPayrollState] = useState([])
+  const [payrollRaw, setPayrollState] = useState([])
   const [editingEmployee, setEditingEmployee] =
   useState(null)
 const [showPayrollDrawer, setShowPayrollDrawer] = useState(false); 
@@ -122,27 +123,157 @@ const setPayroll = (data) => setPayrollState(forcePresentTillSep2026(data));
       });
   }, [selectedMonth, selectedYear]);
 
+  // ===== SALARY SHEET: LOADED FROM UPLOADED EXCEL (NO API) =====
+  const SALARY_LS_KEY = (m, y) => `salary_computation_${y}_${m}`;
+
   const [salaryComputation, setSalaryComputation] = useState([]);
 
-  const fetchSalaryComputation = async () => {
+  // restore the last uploaded sheet for the selected month/year
+  useEffect(() => {
     try {
-      const res = await apiFetch(
-        `${API_BASE}/api/salary-computation?month=${selectedMonth}&year=${selectedYear}`
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setSalaryComputation(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error("Salary computation fetch error:", err);
+      const saved = localStorage.getItem(SALARY_LS_KEY(selectedMonth, selectedYear));
+      setSalaryComputation(saved ? JSON.parse(saved) : []);
+    } catch {
       setSalaryComputation([]);
     }
-  };
-
-  useEffect(() => {
-    fetchSalaryComputation();
   }, [selectedMonth, selectedYear]);
 
 
+  // ===== MERGE UPLOADED SALARY SHEET INTO PAYROLL TABLE =====
+  const nameTokens = (s) =>
+    String(s || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter(Boolean);
+
+  const editDistance = (a, b) => {
+    const m = a.length, n = b.length;
+    const dp = Array.from({ length: m + 1 }, (_, i) => {
+      const row = Array(n + 1).fill(0);
+      row[0] = i;
+      return row;
+    });
+    for (let j = 0; j <= n; j++) dp[0][j] = j;
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        dp[i][j] = Math.min(
+          dp[i - 1][j] + 1,
+          dp[i][j - 1] + 1,
+          dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+        );
+      }
+    }
+    return dp[m][n];
+  };
+
+  // similarity of two single words (0 = no match)
+  const tokenSim = (a, b) => {
+    if (a === b) return 1;
+    const minLen = Math.min(a.length, b.length);
+    const maxLen = Math.max(a.length, b.length);
+    if (minLen >= 4 && (a.startsWith(b) || b.startsWith(a))) return 0.9; // Hirem / Hiremath
+    const d = editDistance(a, b);
+    if (maxLen >= 5 && d <= 1) return 0.85; // Jaisawal / Jaiswal, Mugdum / Magdum
+    if (maxLen >= 8 && d <= 2) return 0.75;
+    return 0;
+  };
+
+  // similarity of two full names (0 = not the same person)
+  const nameScore = (a, b) => {
+    const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+    if (!short.length) return 0;
+    if (short.length === 1 && long.length > 1) return 0;
+    const used = new Set();
+    let total = 0;
+    for (const s of short) {
+      let best = 0, bi = -1;
+      long.forEach((l, i) => {
+        if (used.has(i)) return;
+        const v = tokenSim(s, l);
+        if (v > best) { best = v; bi = i; }
+      });
+      if (best === 0) return 0;
+      used.add(bi);
+      total += best;
+    }
+    const avg = total / short.length;
+    if (avg < 0.75) return 0;
+    return avg + (a.length === b.length ? 0.05 : 0);
+  };
+
+  // employee id -> uploaded sheet row (one-to-one, best matches first)
+  const sheetByEmpId = useMemo(() => {
+    const map = new Map();
+    if (!Array.isArray(payrollRaw) || !salaryComputation.length) return map;
+
+    const candidates = [];
+    salaryComputation.forEach((r, ri) => {
+      const rt = nameTokens(r.employee_name);
+      payrollRaw.forEach((e) => {
+        const score = nameScore(rt, nameTokens(e.name));
+        if (score > 0) candidates.push({ ri, e, score });
+      });
+    });
+
+    candidates.sort(
+      (x, y) =>
+        y.score - x.score ||
+        (Number(y.e.salary) > 0) - (Number(x.e.salary) > 0) ||
+        x.e.id - y.e.id
+    );
+
+    const usedRows = new Set();
+    for (const c of candidates) {
+      if (usedRows.has(c.ri) || map.has(c.e.id)) continue;
+      map.set(c.e.id, salaryComputation[c.ri]);
+      usedRows.add(c.ri);
+    }
+    return map;
+  }, [payrollRaw, salaryComputation]);
+
+  const payroll = useMemo(() => {
+    if (!Array.isArray(payrollRaw)) return [];
+    if (!salaryComputation.length) return payrollRaw;
+
+    const n = (v) => Number(v) || 0;
+
+    return payrollRaw.map((emp) => {
+      const r = sheetByEmpId.get(emp.id);
+      if (!r) return emp;
+
+      const totalDays = n(r.total_days_of_month);
+      const payableDays = n(r.total_payable_days);
+      const fixedGross = n(r.fixed_gross_salary);
+      const other = Math.max(
+        0,
+        fixedGross - (n(r.basic_da) + n(r.hra) + n(r.mob_internet) + n(r.conveyance))
+      );
+
+      return {
+        ...emp,
+        from_sheet: true,
+        salary: fixedGross,
+        gross_salary: fixedGross,
+        basic_da: n(r.basic_da),
+        hra: n(r.hra),
+        conveyance_allowance: n(r.conveyance),
+        medical_allowance: n(r.mob_internet),
+        other_allowance: other,
+        pf: n(r.pf),
+        pt: n(r.pt),
+        bonus: n(r.bonus),
+        total_deduction: n(r.total_deduction),
+        payable_salary: n(r.net_payable),
+        net_pay: n(r.net_payable),
+        total_days: totalDays,
+        present_days: payableDays,
+        absent_days: Math.max(0, totalDays - payableDays),
+        paid_leave_days: 0,
+      };
+    });
+  }, [payrollRaw, salaryComputation, sheetByEmpId]);
+  // ==========================================================
   const openEditModal = (employee) => {
   setEditingEmployee(employee)
   setEditBonus(employee.bonus || 0)
@@ -653,41 +784,95 @@ const uploadSalaryExcel = async (event) => {
     return;
   }
 
-  const confirmed = window.confirm(
-    `Upload "${file.name}" as the salary computation for ` +
-    `${selectedMonth}/${selectedYear}?\n\n` +
-    "Existing records for the same employee and month will be updated."
-  );
-  if (!confirmed) { resetInput(); return; }
-
-  const url = `${API_BASE}/api/salary-computation/upload`;
-
   try {
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("month", selectedMonth);
-    formData.append("year", selectedYear);
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: "array" });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const grid = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: true });
 
-    const res = await apiFetch(url, { method: "POST", body: formData });
-
-    const raw = await res.text();
-    let data;
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      console.error("Non-JSON response:", raw);
-      throw new Error(
-        `Server returned HTML, not JSON.\n\nURL: ${url}\nStatus: ${res.status}\n\n` +
-        raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 250)
-      );
+    // locate header row ("Sr. No" + "Employee Name")
+    let headerRow = -1, srCol = -1;
+    for (let r = 0; r < grid.length; r++) {
+      const cells = grid[r].map((c) => String(c).trim().toLowerCase());
+      const sr = cells.findIndex((c) => c.startsWith("sr"));
+      if (sr !== -1 && cells[sr + 1] === "employee name") {
+        headerRow = r;
+        srCol = sr;
+        break;
+      }
+    }
+    if (headerRow === -1) {
+      throw new Error("Could not find the 'Sr. No' / 'Employee Name' header row.");
     }
 
-    if (!res.ok) throw new Error(data.message || `Upload failed (${res.status}).`);
+    const num = (v) => {
+      const n = Number(String(v).replace(/,/g, ""));
+      return Number.isFinite(n) ? n : 0;
+    };
 
-    await fetchSalaryComputation();
-    alert("✅ " + data.message);
+    const records = [];
+    for (let r = headerRow + 1; r < grid.length; r++) {
+      const row = grid[r];
+      const g = (i) => row[srCol + i];
+      const srNo = Number(g(0));
+      const name = String(g(1) || "").trim();
+
+      // stop at the Total row / end of employee list
+      if (!name || !Number.isFinite(srNo) || String(g(0)).trim() === "") {
+        if (records.length > 0) break;
+        continue;
+      }
+
+      records.push({
+        id: `${srNo}-${name}`,
+        month: selectedMonth,
+        year: selectedYear,
+        sr_no: srNo,
+        employee_name: name,
+        ctc: num(g(2)),
+        fixed_gross_salary: num(g(3)),
+        basic_da: num(g(4)),
+        hra: num(g(5)),
+        mob_internet: num(g(6)),
+        conveyance: num(g(7)),
+        gross: num(g(8)),
+        earn_basic: num(g(9)),
+        earn_hra: num(g(10)),
+        earn_mob_internet: num(g(11)),
+        earn_conveyance: num(g(12)),
+        earn_gross: num(g(13)),
+        pf_wages: num(g(14)),
+        pf: num(g(15)),
+        esic: num(g(16)),
+        pt: num(g(17)),
+        tds: num(g(18)),
+        lwf: num(g(19)),
+        advance: num(g(20)),
+        total_deduction: num(g(21)),
+        net_payable: num(g(22)),
+        gratuity: num(g(23)),
+        employer_pf: num(g(24)),
+        employer_esic: num(g(25)),
+        bonus: num(g(26)),
+        employer_lwf: num(g(27)),
+        total_ctc: num(g(28)),
+        total_days_of_month: num(g(29)),
+        total_payable_days: num(g(30)),
+        per_day_amount: num(g(31)),
+        remark: String(g(32) || "").trim(),
+      });
+    }
+
+    if (records.length === 0) throw new Error("No employee rows found in the file.");
+
+    setSalaryComputation(records);
+    try {
+      localStorage.setItem(SALARY_LS_KEY(selectedMonth, selectedYear), JSON.stringify(records));
+    } catch { /* storage unavailable – table still shows */ }
+
+    alert(`✅ ${records.length} employee record(s) loaded from "${file.name}".`);
   } catch (err) {
-    console.error("Salary Excel upload error:", err);
+    console.error("Salary Excel read error:", err);
     alert("❌ Upload Failed\n\n" + err.message);
   } finally {
     resetInput();
