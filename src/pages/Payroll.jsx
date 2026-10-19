@@ -845,58 +845,114 @@ const uploadSalaryExcel = async (event) => {
       return Number.isFinite(n) ? n : 0;
     };
 
-    const records = [];
-    for (let r = headerRow + 1; r < grid.length; r++) {
-      const row = grid[r];
-      const g = (i) => row[srCol + i];
-      const srNo = Number(g(0));
-      const name = String(g(1) || "").trim();
+    // Detect layout: the FY 2025-26 sheet has "Earn basic" right after "Employee Name";
+    // the older sheet has "CTC" there.
+    const headerCells = grid[headerRow].map((c) => String(c).trim().toLowerCase());
+    const isNewFormat = (headerCells[srCol + 2] || "").startsWith("earn");
 
-      // stop at the Total row / end of employee list
-      if (!name || !Number.isFinite(srNo) || String(g(0)).trim() === "") {
-        if (records.length > 0) break;
-        continue;
+
+
+      const records = [];
+      for (let r = headerRow + 1; r < grid.length; r++) {
+        const row = grid[r];
+        const g = (i) => row[srCol + i];
+
+        const srNo = Number(g(0));
+        const name = String(g(1) || "").trim();
+
+        // Stop at the Total row / end of employee list
+        if (!name || !Number.isFinite(srNo) || String(g(0)).trim() === "") {
+          if (records.length > 0) break;
+          continue;
+        }
+
+        if (isNewFormat) {
+          // ---- NEW FORMAT (FY 2025-26): all values are EARNED amounts ----
+          const totalDays = num(g(23));
+          const payDays = num(g(24));
+          const scale = payDays > 0 && payDays < totalDays ? totalDays / payDays : 1;
+          const fx = (v) => Math.round(num(v) * scale); // back to fixed monthly amount
+
+          records.push({
+            id: `${srNo}-${name}`,
+            month: selectedMonth,
+            year: selectedYear,
+            sr_no: srNo,
+            employee_name: name,
+            ctc: fx(g(22)),
+            fixed_gross_salary: fx(g(7)),
+            basic_da: fx(g(2)),
+            hra: fx(g(3)),
+            mob_internet: fx(g(5)),
+            conveyance: fx(g(4)),
+            gross: fx(g(7)),
+            earn_basic: num(g(2)),
+            earn_hra: num(g(3)),
+            earn_mob_internet: num(g(5)),
+            earn_conveyance: num(g(4)),
+            earn_gross: num(g(7)),
+            pf_wages: num(g(8)),
+            pf: num(g(9)),
+            esic: num(g(10)),
+            pt: num(g(11)),
+            tds: num(g(12)),
+            lwf: num(g(13)),
+            advance: num(g(14)),
+            total_deduction: num(g(15)),
+            net_payable: num(g(16)),
+            gratuity: num(g(17)),
+            employer_pf: num(g(18)),
+            employer_esic: num(g(19)),
+            bonus: num(g(20)),
+            employer_lwf: num(g(21)),
+            total_ctc: num(g(22)),
+            total_days_of_month: totalDays,
+            total_payable_days: payDays,
+            per_day_amount: num(g(25)),
+            remark: String(g(26) || "").trim()
+          });
+        } else {
+          // ---- OLD FORMAT (unchanged) ----
+          records.push({
+            id: `${srNo}-${name}`,
+            month: selectedMonth,
+            year: selectedYear,
+            sr_no: srNo,
+            employee_name: name,
+            ctc: num(g(2)),
+            fixed_gross_salary: num(g(3)),
+            basic_da: num(g(4)),
+            hra: num(g(5)),
+            mob_internet: num(g(6)),
+            conveyance: num(g(7)),
+            gross: num(g(8)),
+            earn_basic: num(g(9)),
+            earn_hra: num(g(10)),
+            earn_mob_internet: num(g(11)),
+            earn_conveyance: num(g(12)),
+            earn_gross: num(g(13)),
+            pf_wages: num(g(14)),
+            pf: num(g(15)),
+            esic: num(g(16)),
+            pt: num(g(17)),
+            tds: num(g(18)),
+            lwf: num(g(19)),
+            advance: num(g(20)),
+            total_deduction: num(g(21)),
+            net_payable: num(g(22)),
+            gratuity: num(g(23)),
+            employer_pf: num(g(24)),
+            employer_esic: num(g(25)),
+            bonus: num(g(26)),
+            employer_lwf: num(g(27)),
+            total_ctc: num(g(28)),
+            total_days_of_month: num(g(29)),
+            total_payable_days: num(g(30)),
+            per_day_amount: num(g(31)),
+            remark: String(g(32) || "").trim()
+          });
+        }
       }
-
-      records.push({
-        id: `${srNo}-${name}`,
-        month: selectedMonth,
-        year: selectedYear,
-        sr_no: srNo,
-        employee_name: name,
-        ctc: num(g(2)),
-        fixed_gross_salary: num(g(3)),
-        basic_da: num(g(4)),
-        hra: num(g(5)),
-        mob_internet: num(g(6)),
-        conveyance: num(g(7)),
-        gross: num(g(8)),
-        earn_basic: num(g(9)),
-        earn_hra: num(g(10)),
-        earn_mob_internet: num(g(11)),
-        earn_conveyance: num(g(12)),
-        earn_gross: num(g(13)),
-        pf_wages: num(g(14)),
-        pf: num(g(15)),
-        esic: num(g(16)),
-        pt: num(g(17)),
-        tds: num(g(18)),
-        lwf: num(g(19)),
-        advance: num(g(20)),
-        total_deduction: num(g(21)),
-        net_payable: num(g(22)),
-        gratuity: num(g(23)),
-        employer_pf: num(g(24)),
-        employer_esic: num(g(25)),
-        bonus: num(g(26)),
-        employer_lwf: num(g(27)),
-        total_ctc: num(g(28)),
-        total_days_of_month: num(g(29)),
-        total_payable_days: num(g(30)),
-        per_day_amount: num(g(31)),
-        remark: String(g(32) || "").trim(),
-      });
-    }
 
     if (records.length === 0) throw new Error("No employee rows found in the file.");
 
