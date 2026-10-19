@@ -848,7 +848,11 @@ const uploadSalaryExcel = async (event) => {
     // Detect layout: the FY 2025-26 sheet has "Earn basic" right after "Employee Name";
     // the older sheet has "CTC" there.
     const headerCells = grid[headerRow].map((c) => String(c).trim().toLowerCase());
-    const isNewFormat = (headerCells[srCol + 2] || "").startsWith("earn");
+    // FY 2024-25 and FY 2025-26 (up to March 2026) share the same layout
+    const isBeforeApr2026 =
+      selectedYear < 2026 || (selectedYear === 2026 && selectedMonth <= 3);
+    const isNewFormat =
+      isBeforeApr2026 || (headerCells[srCol + 2] || "").startsWith("earn");
 
 
 
