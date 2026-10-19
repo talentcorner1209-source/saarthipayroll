@@ -7922,7 +7922,11 @@ app.post(
       // Detect layout: FY 2025-26 sheet has "Earn basic" right after "Employee Name";
       // the older sheet has "CTC" there.
       const headerCells = grid[headerRow].map((c) => String(c).trim().toLowerCase());
-      const isNewFormat = (headerCells[srCol + 2] || "").startsWith("earn");
+      // FY 2024-25 and FY 2025-26 (up to March 2026) share the same layout
+      const isBeforeApr2026 =
+        year < 2026 || (year === 2026 && month <= 3);
+      const isNewFormat =
+        isBeforeApr2026 || (headerCells[srCol + 2] || "").startsWith("earn");
 
       const records = [];
       for (let r = headerRow + 1; r < grid.length; r++) {
